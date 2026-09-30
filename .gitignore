@@ -6,16 +6,20 @@ CLAUDE.md
 .venv/
 __pycache__/
 *.pyc
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
 
 # Test footage: listed in testclips/SOURCES.md, not redistributed
 testclips/*
 !testclips/SOURCES.md
 
 # Research outputs: thousands of frames of real faces, and bulky
-spike/out/
-spike/models/
-spike/*.log
-spike/out_*.log
+research/out/
+research/models/
+research/*.log
 
 # App leftovers
 *.part.mp4

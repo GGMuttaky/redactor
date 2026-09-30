@@ -11,6 +11,7 @@ import json
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -20,6 +21,7 @@ ap.add_argument("--home", required=True)
 ap.add_argument("--stills", required=True, help="folder for frames pulled from each export, to look at")
 ap.add_argument("--mode", default="blur")
 args = ap.parse_args()
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # clip names may not fit the console's code page
 os.environ["REDACTOR_HOME"] = args.home
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -37,8 +39,8 @@ def check(cond, msg):
 
 def streams(path):
     _, ffprobe = media.tools()
-    out = subprocess.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height",
-                          "-of", "json", str(path)], capture_output=True, text=True)
+    out = media.run([ffprobe, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height",
+                     "-of", "json", str(path)])
     return json.loads(out.stdout)["streams"]
 
 
@@ -47,7 +49,7 @@ stills.mkdir(parents=True, exist_ok=True)
 for v in args.videos:
     v = Path(v).resolve()
     print(f"\n== {v.name}")
-    src_hash = render.sha256(v)
+    src_hash = media.sha256(v)
     p = Project.create(v, "normal", 1)
     t0 = time.perf_counter()
     analyze.analyze(p)
@@ -58,7 +60,7 @@ for v in args.videos:
         continue
     n = d["n_frames"]
     check((p.dir / "proxy.mp4").is_file(), "preview copy exists")
-    check(render.count_frames(p.dir / "proxy.mp4") == n, f"preview copy has all {n} frames")
+    check(media.count_frames(p.dir / "proxy.mp4") == n, f"preview copy has all {n} frames")
     check(len(p.times) == n, "one timestamp per frame")
     tracks = p.track_summary
     print(f"  info {n} frames, {len(tracks)} face tracks, {len(p.boxes)} boxes, "
@@ -69,12 +71,16 @@ for v in args.videos:
     if tracks:
         p.set_tracks_enabled([tracks[0]["id"]], False)
     w, h = d["width"], d["height"]
-    reg = p.upsert_region({"keys": {0: [0, 0, w * 0.2, h * 0.2], n - 1: [w * 0.8, h * 0.8, w, h]}, "start": 0, "end": n - 1})
-    check(reg["id"] == 1, "region saved")
+    reg = p.upsert_region({"keys": {0: [0, 0, w * 0.2, h * 0.2], n - 1: [w * 0.8, h * 0.8, w, h]},
+                           "start": 0, "end": n - 1})
+    check(any(r["id"] == reg["id"] for r in p.data["regions"]), f"region {reg['id']} saved")
 
     outs = []
     for i in range(2):
-        render.export(p, args.mode, "ellipse")
+        # The same steps the server takes when Export is clicked.
+        p.cancel_export = threading.Event()
+        p.update(export_job={"status": "queued", "progress": 0, "stage": "Waiting"})
+        render.export(p, args.mode, "ellipse", p.snapshot())
         job = p.data["export_job"]
         check(job["status"] == "done", f"export {i + 1} finished ({job.get('error')})")
         if job["status"] != "done":
@@ -85,14 +91,14 @@ for v in args.videos:
         src_kinds = {s["codec_type"] for s in streams(v)}
         check(("audio" in kinds) == ("audio" in src_kinds), f"export {i + 1}: audio present={('audio' in kinds)} "
               f"matches source={('audio' in src_kinds)}")
-        rep = json.loads(Path(job["report"].replace(".html", ".json")).read_text())
+        rep = json.loads(Path(job["report"]).with_suffix(".json").read_text(encoding="utf-8"))
         check(rep["output"]["frame_count_matches_source"], f"export {i + 1}: report records matching frame count")
         check(rep["summary"]["faces_left_visible"] == ([tracks[0]["id"] + 1] if tracks else []),
               f"export {i + 1}: report lists the face left visible")
     if len(outs) == 2:
-        check(outs[0] != outs[1] and outs[1].name.endswith("_redacted_2.mp4"),
-              f"second export got a new name ({outs[1].name}), first kept")
-    check(render.sha256(v) == src_hash, "source file unchanged")
+        check(outs[0] != outs[1] and outs[0].is_file() and outs[1].is_file(),
+              f"second export got a new name ({outs[0].name} -> {outs[1].name}), first kept")
+    check(media.sha256(v) == src_hash, "source file unchanged")
 
     # Frames to look at: a third, two thirds, and the frame each of two busy tracks is clearest.
     ffmpeg, _ = media.tools()
