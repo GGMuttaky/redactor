@@ -1,0 +1,24 @@
+# Private working notes and editor/agent config
+CLAUDE.md
+.claude/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# Test footage: listed in testclips/SOURCES.md, not redistributed
+testclips/*
+!testclips/SOURCES.md
+
+# Research outputs: thousands of frames of real faces, and bulky
+spike/out/
+spike/models/
+spike/*.log
+spike/out_*.log
+
+# App leftovers
+*.part.mp4
+*_redacted*.mp4
+*_redacted*_report.*
+app/bin/

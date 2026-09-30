@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Redactor</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ccircle cx='16' cy='14' r='7' fill='%23fff' opacity='.9'/%3E%3Crect x='6' y='11' width='20' height='6' rx='2' fill='%230f172a'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css?v=__BUILD__">
+<script>window.TOKEN = "__TOKEN__";</script>
+</head>
+<body>
+<header class="top">
+  <button class="brand" id="homeBtn" title="All videos">
+    <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><circle cx="16" cy="14" r="7" fill="#fff" opacity=".9"/><rect x="6" y="11" width="20" height="6" rx="2" fill="#0b1220"/></svg>
+    <span>Redactor</span>
+  </button>
+  <div class="crumb" id="crumb"></div>
+  <div class="spacer"></div>
+  <div class="top-actions hidden" id="topActions">
+    <div class="seg" id="modeSeg" title="How hidden areas look">
+      <button data-mode="blur" class="on">Blur</button><button data-mode="pixelate">Pixelate</button><button data-mode="solid">Black box</button>
+    </div>
+    <div class="seg" id="shapeSeg" title="Shape used for faces">
+      <button data-shape="ellipse" class="on">Oval</button><button data-shape="rect">Rectangle</button>
+    </div>
+    <button class="ghost" id="reanalyzeBtn">Re-analyse…</button>
+    <button class="primary" id="exportBtn">Export</button>
+  </div>
+</header>
+
+<main id="home" class="view">
+  <section class="home">
+    <div class="hero">
+      <h1>Hide faces in video, on this computer.</h1>
+      <p class="lede">Nothing is uploaded. Pick a video, check what was found, and export a blurred copy with a report of what was hidden.</p>
+      <div class="open-card">
+        <button class="primary big" id="pickBtn">Choose a video…</button>
+        <form id="pathForm" class="path-form">
+          <input id="pathInput" spellcheck="false" placeholder="…or paste a file path, e.g. D:\Footage\interview.mp4">
+          <button type="submit" class="ghost">Open</button>
+        </form>
+        <div class="opts">
+          <label>Sensitivity
+            <select id="sens">
+              <option value="high">High: catch more, more false alarms</option>
+              <option value="normal" selected>Normal</option>
+              <option value="low">Low: fewer false alarms</option>
+            </select>
+          </label>
+          <label>Speed
+            <select id="stride">
+              <option value="1" selected>Thorough: check every frame</option>
+              <option value="2">Faster: every 2nd frame (about 2× quicker; can miss brief or fast-moving faces)</option>
+            </select>
+          </label>
+        </div>
+        <p class="hint" id="hwInfo"></p>
+        <div id="homeError" class="error hidden"></div>
+      </div>
+      <div id="toolWarn" class="warn hidden"></div>
+    </div>
+    <div class="recent">
+      <h2>Recent</h2>
+      <ul id="recentList"><li class="empty">Videos you open appear here.</li></ul>
+    </div>
+    <p class="hint legal">Redactor is free software under the GPL-3.0. Its face model was trained on a
+      dataset licensed for non-commercial use only — see THIRD_PARTY_NOTICES.md before using it commercially.</p>
+  </section>
+</main>
+
+<main id="project" class="view hidden">
+  <section class="workspace">
+    <div class="stage">
+      <div class="player" id="player">
+        <canvas id="canvas" class="hidden"></canvas>
+        <video id="video" preload="auto" playsinline></video>
+        <div id="drawHint" class="draw-hint hidden">Drag over the area to hide. <kbd>Esc</kbd> to cancel.</div>
+        <div id="statusCard" class="status-card hidden">
+          <div class="status-stage" id="statusStage">Starting…</div>
+          <div class="bar"><div id="statusBar"></div></div>
+          <div class="status-meta"><span id="statusPct">0%</span><span id="statusEta"></span></div>
+          <div class="status-actions"><button class="ghost" id="cancelBtn">Cancel</button><button class="primary hidden" id="retryBtn">Try again</button></div>
+        </div>
+      </div>
+      <div class="transport" id="transport">
+        <button class="icon" id="playBtn" title="Play / pause (Space)"><svg viewBox="0 0 24 24"><path id="playIcon" d="M8 5v14l11-7z"/></svg></button>
+        <button class="icon" id="prevBtn" title="Previous frame (←)"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+        <button class="icon" id="nextBtn" title="Next frame (→)"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg></button>
+        <span class="tc" id="tc">00:00.00</span><span class="dim tc" id="dur">/ 00:00.00</span>
+        <span class="dim" id="frameNo"></span>
+        <div class="spacer"></div>
+        <div class="seg small" id="viewSeg" title="B toggles">
+          <button data-view="blur" class="on">Preview result</button><button data-view="boxes">Show boxes</button>
+        </div>
+      </div>
+      <canvas id="timeline" class="timeline" title="Click or drag to move through the video"></canvas>
+    </div>
+
+    <aside class="side">
+      <div class="tabs">
+        <button data-tab="faces" class="on">Faces <span class="count" id="faceCount"></span></button>
+        <button data-tab="regions">Regions <span class="count" id="regionCount"></span></button>
+      </div>
+      <div id="facesPane" class="pane">
+        <div class="filters">
+          <div class="seg small" id="faceFilter">
+            <button data-f="all" class="on">All</button><button data-f="now">On screen</button><button data-f="off">Left visible</button>
+          </div>
+        </div>
+        <div class="bulk">
+          <button class="link" id="allOn">Blur all</button>
+          <button class="link" id="weakOff" title="Seen only once or twice with low confidence: often not a face, but in crowds also real faces seen briefly. Check before using.">Leave low-confidence detections visible</button>
+        </div>
+        <div id="faceList" class="vlist"></div>
+        <p class="hint small">Click a face to jump to it. <kbd>X</kbd> switches the selected face on or off.</p>
+      </div>
+      <div id="regionsPane" class="pane hidden">
+        <p class="hint">Hide number plates, screens, documents or anything else. Draw a box; move or resize it at another moment and it follows between those points.</p>
+        <button class="primary" id="addRegion">Draw a region</button>
+        <ul id="regionList" class="rlist"></ul>
+      </div>
+    </aside>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+  <div class="modal-card" id="modalCard"></div>
+</div>
+
+<script src="/static/app.js?v=__BUILD__"></script>
+</body>
+</html>
