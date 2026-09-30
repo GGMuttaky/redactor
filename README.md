@@ -75,17 +75,16 @@ in [`spike/`](spike/).
 ## How it works
 
 ```mermaid
-flowchart LR
-    A[Video] --> B[ffprobe: size, rate, timestamps]
-    A --> C[Decode thread]
-    C --> D[YuNet on GPU<br/>or CPU]
-    D --> E[Tracker: link, fill gaps,<br/>lead-in / lead-out]
-    E --> F[(Per-frame boxes)]
-    A --> P[540p preview copy]
-    F --> R[Review UI in the browser<br/>live preview, face switches, regions]
+flowchart TD
+    V["Video file<br/>(probed with ffprobe)"] --> D[Decode thread]
+    V --> P[540p preview copy]
+    D --> Y["YuNet face detector<br/>GPU via DirectML, or CPU"]
+    Y --> T["Tracker<br/>link · fill gaps · lead-in / lead-out"]
+    T --> B[("Boxes for every frame")]
+    B --> R["Review in the browser<br/>live preview · face switches · regions"]
     P --> R
-    R --> X[Export: decode → redact → encode<br/>NVENC / AMF / QSV or x264]
-    X --> O[Redacted MP4 + report]
+    R --> E["Export<br/>decode → redact → encode (NVENC / AMF / QSV or x264)"]
+    E --> O["Redacted MP4 + report"]
 ```
 
 The app is a small local web server (Python, standard library) serving a plain-JavaScript review page.
