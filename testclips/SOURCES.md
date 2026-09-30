@@ -28,9 +28,15 @@ Direct file URLs (videos.pexels.com):
 - 07 `https://videos.pexels.com/video-files/7581202/7581202-hd_1920_1080_30fps.mp4`
 - 08 `https://videos.pexels.com/video-files/5442623/5442623-hd_1920_1080_25fps.mp4`
 
-Local testing only. Redacted versions may be used in demos later (modified, per the licence).
+Used for local testing. The demo media in `docs/` shows two of them next to Redactor's redacted output
+(modified, as the licence allows): the before/after GIF uses clip 01, the review-screen screenshot clip 07.
 
 ## Derived test file
 
 - `09_talking_head_with_audio_test.mp4` — clip 08's video stream copied unchanged, plus a generated
-  440 Hz tone as AAC audio. Made locally to test that exports carry audio through (the Pexels clips have none).
+  440 Hz tone as AAC audio. Made locally to test that exports carry audio through (the Pexels clips have none):
+
+  ```
+  ffmpeg -i 08_talking_head_5442623.mp4 -f lavfi -i "sine=frequency=440:sample_rate=48000:duration=21.16" ^
+    -map 0:v -map 1:a -c:v copy -c:a aac -b:a 128k -shortest 09_talking_head_with_audio_test.mp4
+  ```

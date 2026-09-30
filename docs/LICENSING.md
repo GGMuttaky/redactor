@@ -1,6 +1,6 @@
 # Licensing: where Redactor stands, and how to make it commercially clean
 
-## Today (v0.2.0)
+## Today (v0.3.0)
 
 | Part | Licence | Commercial use |
 |---|---|---|
@@ -26,8 +26,8 @@ product that can be sold, or used by companies without doubt, is the face model.
 - **Known risk:** Open Images faces are mostly larger than WIDER FACE's crowd faces, so small-face
   recall may drop. Mitigate with downscale/mosaic augmentation.
 - **Gate before switching:** the new model must match the current one on this repo's test clips
-  (`spike/` method: recall on the hand-counted frames, `spike/gpu_bench.py`-style agreement, and the
-  crowd clip). If it doesn't, it doesn't ship.
+  (`research/` method: recall on the hand-counted frames, `research/gpu_bench.py`-style agreement, and
+  the crowd clip). If it doesn't, it doesn't ship.
 - **Cost:** tens of GB of downloads and a few days of GPU training on a mid-range card.
 - **Attribution to add** once used: "Face model trained on Open Images V7 (annotations CC BY 4.0 by
   Google LLC; images CC BY 2.0 by their respective authors)".

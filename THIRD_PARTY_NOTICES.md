@@ -7,15 +7,19 @@ The components below keep their own licences.
 
 ### YuNet face detection model — MIT, with a training-data restriction
 
-Files:
+Source: [opencv_zoo/models/face_detection_yunet](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet)
+("All files in this directory are licensed under MIT License").
 
-- `app/models/face_detection_yunet_2023mar.onnx` — from [opencv_zoo](https://github.com/opencv/opencv_zoo/tree/main/models/face_detection_yunet), unmodified.
-- `app/tools/source_models/face_detection_yunet_2026may.onnx` — from opencv_zoo, unmodified
-  (the same weights re-exported by OpenCV with dynamic input size).
-- `app/models/face_detection_yunet_2026may_u8.onnx` — generated from the file above by
-  `app/tools/make_gpu_model.py`: adds input conversion and score nodes; the weights are unchanged.
+| File | Origin | Bytes | SHA-256 |
+|---|---|---|---|
+| `app/models/face_detection_yunet_2023mar.onnx` | opencv_zoo, unmodified | 232,589 | `8f2383e4dd3cfbb4553ea8718107fc0423210dc964f9f4280604804ed2552fa4` |
+| `app/tools/source_models/face_detection_yunet_2026may.onnx` | opencv_zoo, unmodified (dynamic input size) | 229,738 | `ebafce4e3c118d6554634be5c27ab333b4c047a9a8c3faf1d7cf93101c22f0f0` |
+| `app/models/face_detection_yunet_2026may_u8.onnx` | generated from the 2026may file by `app/tools/make_gpu_model.py` | 229,903 | `fa83e393325d95c35ea1b82a9ecaf7d3e161c1236da69776b1d7f042e2d750d8` |
 
-Licence of the model files, verbatim from opencv_zoo:
+All three hold the same trained weights: the 112 weight tensors (53,121 values) were compared and are
+identical. The generated file only adds nodes that convert the 8-bit input and combine the scores.
+
+Licence of the model files, verbatim from [opencv_zoo](https://github.com/opencv/opencv_zoo/blob/main/models/face_detection_yunet/LICENSE):
 
 ```
 Copyright (c) 2020 Shiqi Yu <shiqi.yu@gmail.com>
@@ -49,10 +53,14 @@ SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
 | Package | Licence | Used for |
 |---|---|---|
-| [OpenCV](https://opencv.org/) (`opencv-python`) | Apache-2.0 | decoding video, CPU face detection, image processing |
+| [OpenCV](https://opencv.org/) (`opencv-python-headless`) | Apache-2.0 | decoding video, CPU face detection, image processing |
 | [NumPy](https://numpy.org/) | BSD-3-Clause | arrays |
 | [ONNX Runtime](https://onnxruntime.ai/) (`onnxruntime-directml`) | MIT | face detection on the graphics card |
-| [ONNX](https://onnx.ai/) (`onnx`) | Apache-2.0 | only `app/tools/make_gpu_model.py`, not the app |
+| [ONNX](https://onnx.ai/) (`onnx`) | Apache-2.0 | only `app/tools/make_gpu_model.py` (development), not the app |
+| [pytest](https://pytest.org/), [Ruff](https://docs.astral.sh/ruff/) | MIT | development only: tests and lint |
+
+ONNX Runtime also installs its own small dependencies (for example `protobuf`, BSD-3-Clause; `flatbuffers`,
+Apache-2.0; `sympy`, BSD-3-Clause), each under its own licence.
 
 ## Called as a separate program (not bundled)
 
