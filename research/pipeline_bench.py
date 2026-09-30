@@ -5,7 +5,7 @@
 Wall-clock frames per second, including decoding. Also checks the GPU run finds the
 same faces as the CPU run (IoU >= 0.8 one-to-one matches).
 
-    app\\.venv\\Scripts\\python.exe spike\\pipeline_bench.py testclips\\0*.mp4
+    app\\.venv\\Scripts\\python.exe research\\pipeline_bench.py testclips\\0*.mp4
 """
 import sys
 import time
@@ -15,7 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
 from redactor import analyze, media  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from gpu_bench import match  # noqa: E402  (importing runs nothing: the bench loop needs argv clips)
+from gpu_bench import match  # noqa: E402  (safe: gpu_bench's benchmark is behind a __main__ guard)
 
 
 class FakeProject:
@@ -41,10 +41,9 @@ for path in sys.argv[1:]:
         runs[gpu] = (dets, len(dets) / (time.perf_counter() - t0), p.data["detector"])
     cpu, gpu = runs[False], runs[True]
     m = tot = 0
-    for a, b in zip(cpu[0], gpu[0]):
+    for a, b in zip(cpu[0], gpu[0], strict=True):
         m += match(a, b)[0]
         tot += len(a)
+    matched = f"{m}/{tot} ({m / tot:.2%})" if tot else "no faces"
     print(f"| {Path(path).name[:2]} | {info['width']}x{info['height']} | {len(cpu[0])} | {cpu[1]:.1f} ({cpu[2]}) | "
-          f"{gpu[1]:.1f} ({gpu[2]}) | {gpu[1] / cpu[1]:.1f}x | {m}/{tot} ({m / tot:.2%}) |" if tot else
-          f"| {Path(path).name[:2]} | {info['width']}x{info['height']} | {len(cpu[0])} | {cpu[1]:.1f} | {gpu[1]:.1f} | "
-          f"{gpu[1] / cpu[1]:.1f}x | no faces |", flush=True)
+          f"{gpu[1]:.1f} ({gpu[2]}) | {gpu[1] / cpu[1]:.1f}x | {matched} |", flush=True)

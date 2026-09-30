@@ -2,7 +2,7 @@
 # Copyright (C) 2026 Hafiz
 """How much does detecting every Nth frame lose?
 
-Takes the every-frame YuNet detections from a spike run as the reference. For each
+Takes the every-frame YuNet detections from a detector_runs.py run as the reference. For each
 stride N, keeps only every Nth frame's detections, runs the app's own tracker
 (app/redactor/track.py), and checks every reference face on the *skipped* frames:
 is it at least 80 % inside one of the boxes the strided run would redact?

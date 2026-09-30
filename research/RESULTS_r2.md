@@ -1,12 +1,17 @@
-# Spike round 2 — YuNet vs MediaPipe (2026-09-28)
+# Round 2 — YuNet vs MediaPipe (2026-09-28)
+
+> **Outcome:** YuNet adopted; it is the detector in the app (v0.1.0 on). Runs are in `out/`, which is
+> not published (frames of real faces). Written for the CPU-only app; round 3 added the GPU path.
 
 Detector: OpenCV zoo YuNet `face_detection_yunet_2023mar.onnx` (MIT file, 232,589 bytes,
 SHA-256 `8f2383e4…52fa4`) via `cv2.FaceDetectorYN`, full frame resolution, score threshold 0.5.
 Same clips, tracker and sampled frames as round 1 (`RESULTS_r1.md`). Run: `out/r2_yunet_c50`.
 
 CenterFace (as shipped by deface, 7,304,518 bytes) was also downloaded. Its ONNX file has a fixed
-10×3×32×32 input; through OpenCV DNN at 1080p it ran at ~1.1 fps (0.9 s/frame), too slow to be
-practical here, so it was not taken further. It is not used by the app.
+10×3×32×32 input, which ONNX Runtime rejects for other frame sizes, so the `CenterFaceDetector` in
+`detector_runs.py` could not complete a run (the two Tokyo attempts in `out/` stopped before writing
+results). Loaded instead through OpenCV DNN in a one-off check, it took ~0.9 s per 1080p frame
+(~1.1 fps), too slow to be practical here, so it was not taken further. It is not used by the app.
 
 ## Faces found per frame (all frames)
 
@@ -23,14 +28,17 @@ practical here, so it was not taken further. It is not used by the app.
 
 ## Recall on the round-1 frames (hand-counted)
 
+Car park corrected on 2026-09-30 from "9/11": each of the 4 frames has a driver, a passenger and a
+pedestrian (12 faces); round 1 had not counted the pedestrian's partly hidden head in f506.
+
 | clip | frames | MediaPipe tiled | YuNet |
 |---|---|---|---|
 | 01 Tokyo | f229 at full resolution | ~25 % | no clear miss found in the crowd band |
 | 02 Manchester | sheet 03 | 7/8 foreground, distant missed | 8/8 foreground, most distant faces boxed |
 | 03 London | sheet 03 | ~50 % | masked + profile faces covered; background mostly covered |
 | 04 Hong Kong | sheet 03 | near 0 | masked profiles and edge faces covered |
-| 05 car park | sheet 05 | 9/11 (passenger missed twice) | 12/12 |
-| 07 office | sheet 02 | 15/16 | 16/16 |
+| 05 car park | sheet 05 (4 frames) | 10/12 (passenger missed twice) | 12/12 |
+| 07 office | sheet 02 (4 frames) | 15/16 | 16/16 |
 | 08 talking head | all | 100 % | 100 % |
 
 False alarms seen with YuNet: hands holding paper (07), a headlight (05), backs of bald heads (04),
@@ -59,5 +67,5 @@ this overstates the loss somewhat — but fast, brief faces (03, 04) clearly suf
 ## Decision
 
 YuNet replaces MediaPipe in the app. Licence risk (WIDER FACE training data) recorded in
-`app/README.md`. Speed on the test PC's CPU (~5–6 fps at 1080p, ~5 h per hour of 1080p30) is the
+`app/README.md` and `THIRD_PARTY_NOTICES.md`. Speed on the test PC's CPU (~5–6 fps at 1080p, ~5 h per hour of 1080p30) is the
 main weakness; GPU inference (ONNX Runtime DirectML) is the obvious next improvement.

@@ -8,9 +8,14 @@
 2. Whole export (decode -> redact -> encode, threaded) with libx264 and with the hardware
    encoder; frames/s, frame count, output size.
 
-    app\\.venv\\Scripts\\python.exe spike\\export_bench.py <project id> <still.jpg>
+    app\\.venv\\Scripts\\python.exe research\\export_bench.py <project id> <still.jpg>
+
+The project id is a Redactor project that has been analysed (see %LOCALAPPDATA%\\Redactor\\projects).
+Test encodes go to a temporary folder and are deleted.
 """
 import sys
+import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -51,9 +56,10 @@ def old_redact(frame, items):
 p = Project.get(sys.argv[1])
 still = Path(sys.argv[2])
 src = p.data["source"]
+snap = p.snapshot()
 cap = cv2.VideoCapture(src)
 frames = []
-for f, items in p.frame_boxes():
+for _f, items in p.frame_boxes(snap):
     ok, fr = cap.read()
     if not ok:
         break
@@ -63,8 +69,11 @@ cap.release()
 t_old = t_new = 0.0
 for fr, items in frames:
     a, b = fr.copy(), fr.copy()
-    t0 = time.perf_counter(); old_redact(a, items); t1 = time.perf_counter()
-    render.redact(b, items, "blur", "ellipse"); t2 = time.perf_counter()
+    t0 = time.perf_counter()
+    old_redact(a, items)
+    t1 = time.perf_counter()
+    render.redact(b, items, "blur", "ellipse")
+    t2 = time.perf_counter()
     t_old += t1 - t0
     t_new += t2 - t1
 n = len(frames)
@@ -83,12 +92,12 @@ pair = np.hstack([a[y1:y2, x1:x2], np.full((y2 - y1, 8, 3), 255, np.uint8), b[y1
 cv2.imwrite(str(still), pair)
 print(f"still: {still} (left old, right new)")
 
-for enc in (media.CPU_ENCODER, media.pick_encoder()):
-    part = Path(src).with_name(f"_bench_{enc[0]}.mp4")
-    t0 = time.perf_counter()
-    stats = render._encode(p, Path(src), part, "blur", "ellipse", enc, lambda *a: None)
-    dt = time.perf_counter() - t0
-    frames_out = render.count_frames(part)
-    print(f"export {enc[1]:>6} ({enc[0]}): {n / dt:.1f} fps, {dt:.1f} s, frames {frames_out}/{n}, "
-          f"{part.stat().st_size / 1e6:.1f} MB")
-    part.unlink()
+with tempfile.TemporaryDirectory() as tmp:
+    for enc in (media.CPU_ENCODER, media.pick_encoder()):
+        part = Path(tmp) / f"bench_{enc[0]}.mp4"
+        t0 = time.perf_counter()
+        render._encode(p, snap, Path(src), part, "blur", "ellipse", enc, lambda *a: None, threading.Event())
+        dt = time.perf_counter() - t0
+        frames_out = media.count_frames(part)
+        print(f"export {enc[1]:>6} ({enc[0]}): {n / dt:.1f} fps, {dt:.1f} s, frames {frames_out}/{n}, "
+              f"{part.stat().st_size / 1e6:.1f} MB")

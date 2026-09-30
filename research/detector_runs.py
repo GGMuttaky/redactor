@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # Copyright (C) 2026 Hafiz
-"""Face-redaction detection spike (round 1: faces only).
+"""Run a face detector over test clips and write what a reviewer needs to judge recall.
 
-Runs MediaPipe's full-range face detector over test clips, links detections into
-tracks, fills short gaps, and writes what a reviewer needs to judge recall:
+Used for research rounds 1 and 2 (RESULTS_r1.md, RESULTS_r2.md). Detectors: MediaPipe
+full-range (optionally on tiles), YuNet, CenterFace. Detections are linked into tracks
+and short gaps filled, then it writes:
 
   <out>/<run>/<clip>/frames/     sampled frames with the blur regions drawn
   <out>/<run>/<clip>/sheets/     the same frames as 2x2 contact sheets
@@ -14,33 +15,32 @@ tracks, fills short gaps, and writes what a reviewer needs to judge recall:
 Green box = the detector found the face on that frame.
 Orange box = the tracker filled it in (gap between detections, or lead-in/out).
 
-Runs are never overwritten: every run needs a new --run name. See ../CLAUDE.md.
+Runs are never overwritten: every run needs a new --run name.
+
+Needs, besides the app's requirements: `mediapipe==0.10.14` for --detector mediapipe, and
+for --detector centerface the `centerface.onnx` file from github.com/ORB-HD/deface saved as
+research/models/centerface.onnx (not included here).
 """
 import argparse
+import itertools
 import json
-import os
-import shutil
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 import cv2
-import mediapipe as mp
 import numpy as np
 
-WINGET_FFMPEG = (Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft/WinGet/Packages"
-                 / "Gyan.FFmpeg_Microsoft.Winget.Source_8wekyb3d8bbwe/ffmpeg-9.0.1-full_build/bin/ffmpeg.exe")
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "app"))
+from redactor import media  # noqa: E402  (finds ffmpeg the same way the app does)
 
 GREEN = (0, 200, 0)
 ORANGE = (0, 150, 255)
 
 
 def find_ffmpeg():
-    for cand in (os.environ.get("FFMPEG"), shutil.which("ffmpeg"), str(WINGET_FFMPEG)):
-        if cand and Path(cand).exists():
-            return cand
-    sys.exit("ffmpeg not found - set the FFMPEG environment variable")
+    return media.tools()[0]
 
 
 # ---------------------------------------------------------------- geometry
@@ -148,7 +148,8 @@ class CenterFaceDetector:
         import onnxruntime as ort
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = 4
-        self.sess = ort.InferenceSession(str(Path(__file__).resolve().parent / "models" / "centerface.onnx"), opts, providers=["CPUExecutionProvider"])
+        model = Path(__file__).resolve().parent / "models" / "centerface.onnx"
+        self.sess = ort.InferenceSession(str(model), opts, providers=["CPUExecutionProvider"])
         self.input = self.sess.get_inputs()[0].name
         self.conf = conf
         self.scale = scale
@@ -195,6 +196,7 @@ class FaceDetector:
     """MediaPipe full-range (Apache-2.0, Google-trained). Optional overlapping tiles for small faces."""
 
     def __init__(self, conf, tile, overlap=0.25):
+        import mediapipe as mp  # research-only dependency, needed just for this detector
         fd = mp.solutions.face_detection
         self.full = fd.FaceDetection(model_selection=1, min_detection_confidence=conf)
         self.tiles = fd.FaceDetection(model_selection=1, min_detection_confidence=conf) if tile else None
@@ -294,7 +296,7 @@ def fill_tracks(tracks, n_frames, fps, lead_s=0.25):
     out = [[] for _ in range(n_frames)]
     for t in tracks:
         fs = sorted(t["boxes"])
-        for a, b in zip(fs, fs[1:]):
+        for a, b in itertools.pairwise(fs):
             out[a].append((t["boxes"][a], "det", t["id"]))
             for g in range(a + 1, b):
                 out[g].append((lerp(t["boxes"][a], t["boxes"][b], (g - a) / (b - a)), "fill", t["id"]))
@@ -401,7 +403,8 @@ def process_clip(path, run_dir, args, ffmpeg):
         if f in samples:
             img = frame.copy()
             n_det = sum(1 for b in per_frame[f] if b[1] == "det")
-            draw(img, per_frame[f], f"{path.stem[:2]}  f{f}  t={f / fps:.2f}s  det={n_det}  fill={len(per_frame[f]) - n_det}")
+            label = f"{path.stem[:2]}  f{f}  t={f / fps:.2f}s  det={n_det}  fill={len(per_frame[f]) - n_det}"
+            draw(img, per_frame[f], label)
             cv2.imwrite(str(clip_dir / "frames" / f"f{f:05d}.jpg"), img, [cv2.IMWRITE_JPEG_QUALITY, 90])
             drawn.append(img)
         if preview:
@@ -443,7 +446,8 @@ def main():
     ap.add_argument("clips", nargs="+")
     ap.add_argument("--run", required=True, help="run name; must not exist yet")
     ap.add_argument("--out", default=str(Path(__file__).parent / "out"))
-    ap.add_argument("--tile", type=int, default=0, help="also detect on overlapping tiles of this size (px); 0 = whole frame only")
+    ap.add_argument("--tile", type=int, default=0,
+                    help="also detect on overlapping tiles of this size (px); 0 = whole frame only")
     ap.add_argument("--detector", choices=["mediapipe", "yunet", "centerface"], default="mediapipe")
     ap.add_argument("--scale", type=float, default=1.0, help="centerface: resize factor before detection")
     ap.add_argument("--conf", type=float, default=0.3, help="detector confidence threshold")
