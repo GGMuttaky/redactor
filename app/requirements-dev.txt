@@ -1,0 +1,5 @@
+-r requirements.txt
+pytest==9.1.1
+ruff==0.16.9
+# only for tools/make_gpu_model.py
+onnx==1.23.0

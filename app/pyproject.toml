@@ -1,0 +1,51 @@
+# Redactor is run from this folder (Redactor.bat or `python -m redactor`), not installed from PyPI.
+# This file declares the project and configures the development tools.
+
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redactor"
+dynamic = ["version"]
+description = "Offline face redaction for video: find, review and blur faces locally."
+readme = "README.md"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Hafiz" }]
+requires-python = ">=3.12"
+dependencies = [
+    "numpy==2.5.3",
+    "opencv-python-headless==5.0.0.93",
+    "onnxruntime-directml==1.24.4; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1", "ruff==0.16.9", "onnx==1.23.0"]
+
+[project.scripts]
+redactor = "redactor.__main__:main"
+
+[project.urls]
+Homepage = "https://github.com/GGMuttaky/redactor"
+
+[tool.setuptools]
+packages = ["redactor"]
+
+[tool.setuptools.package-data]
+redactor = ["web/*"]
+
+[tool.setuptools.dynamic]
+version = { attr = "redactor.__version__" }
+
+[tool.ruff]
+line-length = 125
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["redactor", "track_ref", "gpu_bench"]

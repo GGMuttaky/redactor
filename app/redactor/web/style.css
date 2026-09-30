@@ -200,3 +200,15 @@ select {
   .side { min-height: 420px; }
   .crumb .name { max-width: 60vw; }
 }
+
+/* ------------------------------------------------------------ messages, destructive actions */
+.toast {
+  position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); max-width: min(560px, calc(100% - 32px));
+  background: #3b1d1d; color: #fecaca; border: 1px solid rgba(248, 113, 113, .5); border-radius: 10px;
+  padding: 10px 14px; z-index: 20; box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.primary.danger { background: var(--danger); color: #2a0a0a; }
+.primary.danger:hover { background: #fca5a5; }
+.recent li .del-project { width: 30px; height: 30px; flex: none; }
+.recent li .del-project svg { width: 17px; height: 17px; fill: var(--dim); }
+.recent li .del-project:hover svg { fill: var(--danger); }

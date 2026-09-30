@@ -6,9 +6,13 @@ Offline, so both ends of every gap are known: gaps are interpolated rather than
 predicted. Each track also gets a short lead-in/out that follows its motion,
 covering a face for a moment before it is first found and after it is last found.
 """
+import itertools
+
 import numpy as np
 
 
+# Plain-Python geometry helpers, used by the tests and research scripts as the reference
+# the vectorised code is checked against.
 def area(b):
     return max(0.0, b[2] - b[0]) * max(0.0, b[3] - b[1])
 
@@ -45,8 +49,9 @@ def _candidate_pairs(active, dets, f):
     Score 1 + IoU when the prediction overlaps the detection (IoU > 0.1); otherwise, for
     small fast faces that barely overlap frame to frame, 1 - distance / (0.6 * size) when
     the centres are close. Computed as matrices: a crowd has ~50 faces and ~100 open
-    tracks per frame, and pair-by-pair Python made tracking slower than detection.
-    Order and ties match the original pair-by-pair version (spike/track_ref.py).
+    tracks per frame, and pair-by-pair Python took almost as long as GPU detection itself
+    (5.7 s vs ~6.5 s on a 5 s crowd clip; this version: 0.23 s). Order and ties match the
+    original pair-by-pair version (research/track_ref.py), checked on all test clips.
     """
     last = np.array([t["boxes"][t["last"]][:4] for t in active], dtype=np.float64)
     vel = np.array([t["vel"] for t in active], dtype=np.float64)
@@ -132,7 +137,7 @@ def expand(track, n_frames, fps, w, h, lead_s=0.25):
         if box[2] - box[0] >= 2 and box[3] - box[1] >= 2:
             out[f] = (box, kind)
 
-    for a, b in zip(fs, fs[1:]):
+    for a, b in itertools.pairwise(fs):
         put(a, boxes[a][:4], "det")
         for g in range(a + 1, b):
             put(g, lerp(boxes[a], boxes[b], (g - a) / (b - a)), "fill")

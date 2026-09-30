@@ -1,5 +1,5 @@
 numpy==2.5.3
-opencv-python==5.0.0.93
-# Face detection on the graphics card (DirectML: NVIDIA, AMD, Intel on Windows). The app falls back
-# to the CPU automatically if it is missing or the card cannot be used.
+opencv-python-headless==5.0.0.93
+# Face detection on the graphics card (DirectML on Windows). The app falls back to the CPU
+# automatically if it is missing or the card cannot be used.
 onnxruntime-directml==1.24.4; sys_platform == "win32"

@@ -2,20 +2,22 @@
 # Copyright (C) 2026 Hafiz
 """Face detection with YuNet, on the graphics card when possible.
 
-YuNet (opencv_zoo, MIT-licensed weights) runs at full frame resolution, so it
-finds small, distant faces that close-range detectors miss. It was the only
-detector in the spike that held up on crowds; see spike/RESULTS_r2.md.
+YuNet (opencv_zoo, MIT-licensed weights) runs on frames of up to 1920 px on the long
+side, so it finds small, distant faces that close-range detectors miss. It was the
+only detector tested that held up on crowds; see research/RESULTS_r2.md.
 
 Two backends, same model weights:
-  - GPU: ONNX Runtime + DirectML (any DirectX 12 card: NVIDIA, AMD, Intel), using
-    the dynamic-shape export `face_detection_yunet_2026may.onnx`. OpenCV's own
-    FaceDetectorYN cannot use the GPU in the pip build, so decoding is done here,
-    mirroring OpenCV's face_detect.cpp. spike/RESULTS_r3.md shows the two agree.
+  - GPU: ONNX Runtime + DirectML (DirectX 12 cards; tested on NVIDIA only), using
+    `face_detection_yunet_2026may_u8.onnx`: OpenCV's dynamic-shape export wrapped to
+    take raw 8-bit frames (tools/make_gpu_model.py). The pip build of OpenCV has no
+    CUDA backend (its OpenCL target was not evaluated), so the output decoding is done
+    here, mirroring OpenCV's face_detect.cpp; research/RESULTS_r3.md shows they agree.
   - CPU: OpenCV's FaceDetectorYN with `face_detection_yunet_2023mar.onnx`.
 
 Licence note: YuNet was trained on WIDER FACE (CC BY-NC-ND 4.0, non-commercial). Treat the
 model as non-commercial until replaced; see THIRD_PARTY_NOTICES.md and docs/LICENSING.md.
 """
+import threading
 from pathlib import Path
 
 import cv2
@@ -27,6 +29,11 @@ MODEL_CPU = MODELS / "face_detection_yunet_2023mar.onnx"
 # the bytes to copy to the card per frame, which is what limits speed when the link to the card is slow.
 MODEL_DYN = MODELS / "face_detection_yunet_2026may_u8.onnx"
 STRIDES = (8, 16, 32)
+
+
+def _pad32(n):
+    """YuNet's input size: OpenCV pads each side up to the next multiple of 32."""
+    return (n - 1) // 32 * 32 + 32
 
 
 def _scaled(bgr, max_side):
@@ -102,7 +109,7 @@ class GpuDetector:
             w, h = frame_size
             s = min(1.0, max_side / max(w, h))
             iw, ih = round(w * s), round(h * s)
-            self.pad_size = ((iw - 1) // 32 * 32 + 32, (ih - 1) // 32 * 32 + 32)
+            self.pad_size = (_pad32(iw), _pad32(ih))
             opts.add_free_dimension_override_by_name("width", self.pad_size[0])
             opts.add_free_dimension_override_by_name("height", self.pad_size[1])
         self.sess = ort.InferenceSession(str(MODEL_DYN), opts, providers=[provider])
@@ -122,7 +129,7 @@ class GpuDetector:
         """CPU-side work (resize, pad to x32): cheap, and safe to run on a reader thread."""
         img, scale = _scaled(bgr, self.max_side)
         ih, iw = img.shape[:2]
-        pw, ph = (iw - 1) // 32 * 32 + 32, (ih - 1) // 32 * 32 + 32  # OpenCV pads right/bottom to x32
+        pw, ph = _pad32(iw), _pad32(ih)  # padding goes on the right and bottom, as in OpenCV
         if (pw, ph) != (iw, ih):
             img = cv2.copyMakeBorder(img, 0, ph - ih, 0, pw - iw, cv2.BORDER_CONSTANT, value=0)
         return img[None], scale, bgr.shape[1], bgr.shape[0]  # uint8 BGR [1, H, W, 3]
@@ -155,18 +162,20 @@ class GpuDetector:
 
 
 _gpu_ok = None
+_gpu_lock = threading.Lock()
 
 
 def gpu_available():
     """Whether a DirectML session starts and runs here (checked once per app run)."""
     global _gpu_ok
-    if _gpu_ok is None:
-        try:
-            GpuDetector(0.5, frame_size=(64, 64)).warm_up()
-            _gpu_ok = True
-        except Exception:
-            _gpu_ok = False
-    return _gpu_ok
+    with _gpu_lock:
+        if _gpu_ok is None:
+            try:
+                GpuDetector(0.5, frame_size=(64, 64)).warm_up()
+                _gpu_ok = True
+            except Exception:  # missing package, no DX12 card, driver error: all mean "no GPU"
+                _gpu_ok = False
+        return _gpu_ok
 
 
 def make_detector(conf=0.5, prefer_gpu=True, frame_size=None):
@@ -183,7 +192,3 @@ def make_detector(conf=0.5, prefer_gpu=True, frame_size=None):
         except Exception as e:  # any GPU problem falls back to the CPU path, never stops the job
             return CpuDetector(conf), f"Graphics card not used ({str(e)[:160]}); using the CPU."
     return CpuDetector(conf), None
-
-
-# Kept for callers that predate make_detector().
-FaceDetector = CpuDetector

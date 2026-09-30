@@ -5,8 +5,9 @@
 
 const $ = (s, el = document) => el.querySelector(s);
 const $$ = (s, el = document) => [...el.querySelectorAll(s)];
-const TOKEN = window.TOKEN;
+const TOKEN = document.querySelector('meta[name="redactor-token"]').content;
 const CHUNK = 300; // frames of boxes fetched per request
+const PID_RE = /^[a-z0-9-]{1,48}-[0-9a-f]{8}$/; // project ids, as the server makes them
 
 const video = $("#video");
 const canvas = $("#canvas");
@@ -16,13 +17,24 @@ const tctx = tiny.getContext("2d");
 
 const S = {
   id: null, project: null, ready: false, loadingReview: false,
-  fps: 30, n: 0, w: 1, h: 1, scale: 1, times: [],
+  fps: 30, n: 0, w: 1, h: 1, times: [],
   tracks: [], byId: new Map(), disabled: new Set(), density: [],
   regions: [], chunks: new Map(), loading: new Set(),
   frame: 0, view: "blur", style: { mode: "blur", shape: "ellipse" },
   selected: null, mode: null, drag: null, filter: "all",
   exportOpen: false, statusStart: null,
 };
+
+/* Errors from actions without their own handling appear as a short message instead of vanishing. */
+let toastTimer = null;
+function toast(msg) {
+  const el = $("#toast");
+  el.textContent = msg;
+  el.classList.remove("hidden");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.add("hidden"), 6000);
+}
+window.addEventListener("unhandledrejection", (e) => toast(e.reason?.message || String(e.reason)));
 
 async function api(path, opts = {}) {
   const res = await fetch(path, {
@@ -34,14 +46,15 @@ async function api(path, opts = {}) {
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
 }
-const media = (path) => `/media/${S.id}/${path}?token=${encodeURIComponent(TOKEN)}`;
+const media = (path) => `/media/${encodeURIComponent(S.id)}/${path}?token=${encodeURIComponent(TOKEN)}`;
 
 /* ---------------------------------------------------------------- formatting */
 
 function fmtTime(sec) {
   if (!isFinite(sec) || sec < 0) sec = 0;
-  const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
-  const s = (sec % 60).toFixed(2).padStart(5, "0");
+  const cs = Math.round(sec * 100); // round once, so 59.999 s shows as 01:00.00, never 00:60.00
+  const h = Math.floor(cs / 360000), m = Math.floor(cs / 6000) % 60;
+  const s = ((cs % 6000) / 100).toFixed(2).padStart(5, "0");
   return h ? `${h}:${String(m).padStart(2, "0")}:${s}` : `${String(m).padStart(2, "0")}:${s}`;
 }
 const frameTime = (f) => (S.times[f] !== undefined ? S.times[f] : f / S.fps);
@@ -64,14 +77,14 @@ async function loadHome() {
   showView("home");
   try {
     const st = await api("/api/status");
-    $("#hwInfo").textContent = st.ffmpeg
-      ? `Finding faces on the ${st.gpu ? "graphics card" : "CPU (no usable graphics card found)"} · ` +
+    $("#hwInfo").textContent = `Redactor ${st.version}` + (st.ffmpeg
+      ? ` · finding faces on the ${st.gpu ? "graphics card" : "CPU (no usable graphics card found)"} · ` +
         `exporting with the ${st.encoder === "CPU" ? "CPU video encoder" : `${st.encoder} graphics card's video encoder`}.`
-      : "";
+      : "");
     const warn = $("#toolWarn");
     warn.classList.toggle("hidden", st.ffmpeg && st.ffprobe);
-    warn.innerHTML = "<b>ffmpeg is missing.</b> Redactor needs it to read and write video. Install it with " +
-      "<kbd>winget install Gyan.FFmpeg</kbd>, or put <code>ffmpeg.exe</code> and <code>ffprobe.exe</code> in the app's <code>bin</code> folder, then restart.";
+    warn.innerHTML = "<b>Redactor needs FFmpeg to read and write video.</b> " +
+      `${esc(st.ffmpeg_problem || "")} Then restart Redactor.`;
     const list = await api("/api/projects");
     const ul = $("#recentList");
     ul.innerHTML = list.length ? "" : '<li class="empty">Videos you open appear here.</li>';
@@ -80,13 +93,26 @@ async function loadHome() {
       li.className = "item";
       const chip = { ready: "ready", error: "error", analyzing: "busy", queued: "busy" }[p.status] || "";
       const label = { ready: "Ready", error: "Error", analyzing: "Analysing", queued: "Queued", cancelled: "Cancelled", new: "New" }[p.status] || p.status;
-      li.innerHTML = `<span class="nm" title="${esc(p.source)}">${esc(p.name)}</span><span class="when">${esc(p.created || "")}</span><span class="chip ${chip}">${label}</span>`;
-      li.onclick = () => openProject(p.id);
+      li.innerHTML = `<span class="nm" title="${esc(p.source)}">${esc(p.name)}</span><span class="when">${esc(p.created || "")}</span>` +
+        `<span class="chip ${chip}">${esc(label)}</span>` +
+        `<button class="icon del-project" title="Delete this project's preview copy, thumbnails and choices" aria-label="Delete project ${esc(p.name)}">` +
+        `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3h6l1 2h4v2H4V5h4zm-3 6h12l-1 12H7z"/></svg></button>`;
+      li.onclick = (e) => { if (!e.target.closest(".del-project")) openProject(p.id); };
+      li.querySelector(".del-project").onclick = () => deleteProject(p);
       ul.appendChild(li);
     }
   } catch (e) {
     showHomeError(e.message);
   }
+}
+
+async function deleteProject(p) {
+  const ok = await confirmModal(`Delete “${p.name}” from Redactor?`,
+    "This removes its preview copy, face thumbnails and your choices from this computer. " +
+    "The original video and any exports are not touched.", "Delete");
+  if (!ok) return;
+  await api(`/api/projects/${encodeURIComponent(p.id)}`, { method: "DELETE" });
+  loadHome();
 }
 
 function showHomeError(msg) {
@@ -141,6 +167,7 @@ function resetProject() {
 }
 
 async function openProject(id) {
+  if (!PID_RE.test(id)) return loadHome();
   resetProject();
   S.id = id;
   history.replaceState(null, "", "#" + id);
@@ -192,7 +219,7 @@ function showStatus(d) {
 }
 const fmtDur = (s) => (s < 60 ? `${Math.ceil(s)} s` : s < 3600 ? `${Math.round(s / 60)} min` : `${(s / 3600).toFixed(1)} h`);
 
-$("#cancelBtn").onclick = () => api(`/api/projects/${S.id}/cancel`, { method: "POST" });
+$("#cancelBtn").onclick = () => api(`/api/projects/${S.id}/cancel`, { method: "POST", body: { job: "analysis" } });
 $("#retryBtn").onclick = async () => {
   await api(`/api/projects/${S.id}/analyze`, { method: "POST", body: {} });
   startPolling();
@@ -218,7 +245,7 @@ async function poll() {
   }
   S.project = d;
   const analysing = d.status === "queued" || d.status === "analyzing";
-  const exporting = d.export_job && d.export_job.status === "running";
+  const exporting = d.export_job && ["queued", "running"].includes(d.export_job.status);
   if (analysing || d.status === "error" || d.status === "cancelled") {
     if (S.ready) leaveReview();
     applyProject(d);
@@ -258,9 +285,10 @@ async function loadReview(d) {
       video.onloadeddata = ok;
       video.onerror = () => fail(new Error("The preview copy could not be played."));
     });
+    // The browser reports the display size, which for anamorphic video differs from the stored
+    // frame size the boxes are in: so horizontal and vertical scales are kept separate (render()).
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    S.scale = canvas.width / S.w;
     $("#statusCard").classList.add("hidden");
     canvas.classList.remove("hidden");
     S.ready = true;
@@ -411,14 +439,14 @@ function effect(x, y, w, h, mode, oval) {
 
 function render() {
   if (!S.ready || canvas.classList.contains("hidden")) return;
-  const sc = S.scale, lw = Math.max(1.5, canvas.width / 600);
+  const sx = canvas.width / S.w, sy = canvas.height / S.h, lw = Math.max(1.5, canvas.width / 600);
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
   const boxes = boxesAt(S.frame) || [];
   const sel = S.selected;
   const preview = S.view === "blur";
   for (const [tid, x1, y1, x2, y2, det] of boxes) {
     const on = !S.disabled.has(tid);
-    const x = x1 * sc, y = y1 * sc, w = (x2 - x1) * sc, h = (y2 - y1) * sc;
+    const x = x1 * sx, y = y1 * sy, w = (x2 - x1) * sx, h = (y2 - y1) * sy;
     if (preview) {
       if (on) effect(x, y, w, h, S.style.mode, S.style.shape === "ellipse");
     } else {
@@ -440,7 +468,7 @@ function render() {
     let b = S.drag && S.drag.reg && S.drag.reg.id === r.id && S.drag.box ? S.drag.box : regionBox(r, S.frame);
     if (!b && isSel) b = regionBoxAny(r, S.frame);
     if (!b) continue;
-    const x = b[0] * sc, y = b[1] * sc, w = (b[2] - b[0]) * sc, h = (b[3] - b[1]) * sc;
+    const x = b[0] * sx, y = b[1] * sy, w = (b[2] - b[0]) * sx, h = (b[3] - b[1]) * sy;
     const active = regionBox(r, S.frame);
     if (preview && active) effect(x, y, w, h, S.style.mode, false);
     if (!preview || isSel) {
@@ -461,7 +489,7 @@ function render() {
     ctx.lineWidth = lw;
     ctx.strokeStyle = "#a78bfa";
     ctx.setLineDash([6, 4]);
-    ctx.strokeRect(Math.min(x0, x1) * sc, Math.min(y0, y1) * sc, Math.abs(x1 - x0) * sc, Math.abs(y1 - y0) * sc);
+    ctx.strokeRect(Math.min(x0, x1) * sx, Math.min(y0, y1) * sy, Math.abs(x1 - x0) * sx, Math.abs(y1 - y0) * sy);
     ctx.setLineDash([]);
   }
 }
@@ -646,10 +674,11 @@ const faceList = new VList($("#faceList"), 64, (t) => {
   const on = !S.disabled.has(t.id);
   const isSel = S.selected?.type === "face" && S.selected.id === t.id;
   el.className = `face${on ? "" : " off"}${isSel ? " sel" : ""}`;
-  el.innerHTML = `<div class="th" style="background-image:url('${media(`thumbs/${t.id}.jpg`)}')"></div>
+  el.innerHTML = `<div class="th"></div>
     <div class="txt"><div class="t1">Face ${t.id + 1}${t.weak ? '<span class="badge">maybe not a face</span>' : ""}</div>
     <div class="t2">${fmtTime(frameTime(t.start))} – ${fmtTime(frameTime(t.end))}</div></div>
-    <label class="toggle" title="${on ? "Blurred: click to leave visible" : "Left visible: click to blur"}"><input type="checkbox" ${on ? "checked" : ""}><span></span></label>`;
+    <label class="toggle" title="${on ? "Hidden: click to leave visible" : "Left visible: click to hide"}"><input type="checkbox" aria-label="Hide face ${t.id + 1}" ${on ? "checked" : ""}><span></span></label>`;
+  el.querySelector(".th").style.backgroundImage = `url("${media(`thumbs/${t.id}.jpg`)}")`;
   el.onclick = (e) => { if (!e.target.closest(".toggle")) selectFace(t.id, true); };
   el.querySelector("input").onchange = (e) => setFaces([t.id], e.target.checked);
   return el;
@@ -661,7 +690,7 @@ function visibleFaces() {
   return S.tracks;
 }
 function refreshFaces(reset) {
-  faceList.empty = S.tracks.length ? (S.filter === "off" ? "Every face is blurred." : "No faces on screen at this moment.")
+  faceList.empty = S.tracks.length ? (S.filter === "off" ? "Every face is hidden." : "No faces on screen at this moment.")
     : "No faces were found in this video. You can still hide areas by hand under Regions.";
   const items = visibleFaces();
   if (reset) $("#faceList").scrollTop = 0;
@@ -747,6 +776,9 @@ async function saveRegion(r) {
   drawTimeline();
 }
 async function deleteRegion(id) {
+  const r = S.regions.find((x) => x.id === id);
+  if (!(await confirmModal(`Delete “${r ? r.label : "this region"}”?`,
+    "The area it hides will be visible in exports.", "Delete"))) return;
   await api(`/api/projects/${S.id}/regions/${id}`, { method: "DELETE" });
   S.regions = S.regions.filter((r) => r.id !== id);
   if (S.selected?.type === "region" && S.selected.id === id) S.selected = null;
@@ -853,12 +885,26 @@ function openModal(html) {
   $("#modalCard").innerHTML = html;
   $("#modal").classList.remove("hidden");
 }
+let pendingConfirm = null;
 function closeModal() {
   $("#modal").classList.add("hidden");
   S.exportOpen = false;
+  if (pendingConfirm) { const answer = pendingConfirm; pendingConfirm = null; answer(false); }
+}
+/* Resolves true or false; closing the dialog any other way (Esc, clicking outside) counts as No. */
+function confirmModal(title, text, okLabel) {
+  closeModal();
+  return new Promise((resolve) => {
+    openModal(`<h3>${esc(title)}</h3><p class="dim">${esc(text)}</p>
+      <div class="actions"><button class="ghost" id="mNo">Cancel</button><button class="primary danger" id="mYes">${esc(okLabel)}</button></div>`);
+    pendingConfirm = resolve;
+    $("#mNo").onclick = () => closeModal();
+    $("#mYes").onclick = () => { pendingConfirm = null; closeModal(); resolve(true); };
+    $("#mYes").focus();
+  });
 }
 $("#modal").addEventListener("pointerdown", (e) => {
-  if (e.target.id === "modal" && !(S.project?.export_job?.status === "running" && S.exportOpen)) closeModal();
+  if (e.target.id === "modal" && !(["queued", "running"].includes(S.project?.export_job?.status) && S.exportOpen)) closeModal();
 });
 
 const modeName = { blur: "Blur", pixelate: "Pixelate", solid: "Black box" };
@@ -867,11 +913,11 @@ $("#exportBtn").onclick = () => {
   if (!S.ready) return;
   S.exportOpen = true;
   const job = S.project.export_job;
-  if (job && job.status === "running") { renderExportModal(job); startPolling(); return; }
+  if (job && ["queued", "running"].includes(job.status)) { renderExportModal(job); startPolling(); return; }
   const off = S.disabled.size, regs = S.regions.filter((r) => r.enabled !== false).length;
   const stem = S.project.name.replace(/\.[^.]+$/, "");
   openModal(`<h3>Export a redacted copy</h3>
-    <p>${S.tracks.length - off} of ${S.tracks.length} faces blurred${regs ? `, ${regs} region${regs > 1 ? "s" : ""}` : ""}.
+    <p>${S.tracks.length - off} of ${S.tracks.length} faces hidden${regs ? `, ${regs} region${regs > 1 ? "s" : ""}` : ""}.
     Style: <b>${modeName[S.style.mode]}</b>${S.style.mode !== "solid" ? `, faces as ${S.style.shape === "ellipse" ? "ovals" : "rectangles"}` : ""}.</p>
     ${off ? `<p class="bad">${off} face${off > 1 ? "s are" : " is"} left visible on purpose.</p>` : ""}
     <p class="dim">Saved beside the original. The original is never changed, and an existing export is never overwritten.</p>
@@ -882,28 +928,29 @@ $("#exportBtn").onclick = () => {
     $("#mGo").disabled = true;
     try {
       await api(`/api/projects/${S.id}/export`, { method: "POST", body: S.style });
-      S.project.export_job = { status: "running", progress: 0, stage: "Starting" };
+      S.project.export_job = { status: "queued", progress: 0, stage: "Starting" };
       renderExportModal(S.project.export_job);
       startPolling();
     } catch (e) {
       $("#mGo").disabled = false;
-      alert(e.message);
+      toast(e.message);
     }
   };
 };
 
 function renderExportModal(job) {
   if (!S.exportOpen || !job) return;
-  if (job.status === "running") {
+  if (job.status === "running" || job.status === "queued") {
     const pct = Math.round((job.progress || 0) * 100);
     openModal(`<h3>Exporting…</h3><p>${esc(job.stage || "Exporting")}</p>
-      <div class="bar"><div style="width:${pct}%"></div></div><div class="status-meta"><span>${pct}%</span><span class="dim">Full resolution, original audio</span></div>
+      <div class="bar"><div id="mBar"></div></div><div class="status-meta"><span>${pct}%</span><span class="dim">Full resolution, original audio</span></div>
       <div class="actions"><button class="ghost" id="mStop">Stop</button></div>`);
-    $("#mStop").onclick = () => api(`/api/projects/${S.id}/cancel`, { method: "POST" });
+    $("#mBar").style.width = `${pct}%`;
+    $("#mStop").onclick = () => api(`/api/projects/${S.id}/cancel`, { method: "POST", body: { job: "export" } });
   } else if (job.status === "done") {
     const ok = job.frames_ok;
     openModal(`<h3>Export finished</h3>
-      <div class="path">${esc(job.path)}</div>
+      <div class="path">${esc(job.path || "")}</div>
       <p class="${ok ? "ok" : "bad"}">${ok ? `✓ All ${S.n} frames written and checked.` : `Frame count mismatch: ${job.out_frames} written, ${S.n} expected. Check this file before using it.`}</p>
       ${job.encoder ? `<p class="dim">Encoded with the ${esc(job.encoder)} encoder${job.seconds ? ` in ${fmtDur(job.seconds)}` : ""}.</p>` : ""}
       <p class="dim">Automatic detection can miss faces. Watch the export before you publish it.</p>
@@ -924,7 +971,7 @@ $("#reanalyzeBtn").onclick = () => {
   openModal(`<h3>Analyse again</h3>
     <p class="dim">Runs detection again with new settings. Regions you drew are kept. Face on/off choices reset, because the faces are found again.</p>
     <label>Sensitivity <select id="mSens"><option value="high">High: catch more, more false alarms</option><option value="normal">Normal</option><option value="low">Low: fewer false alarms</option></select></label>
-    <label>Speed <select id="mStride"><option value="1">Thorough: check every frame</option><option value="2">Faster: every 2nd frame (about 2× quicker; can miss brief or fast-moving faces)</option></select></label>
+    <label>Speed <select id="mStride"><option value="1">Thorough: check every frame</option><option value="2">Faster: check every 2nd frame (can miss brief or fast-moving faces)</option></select></label>
     <div class="actions"><button class="ghost" id="mCancel">Cancel</button><button class="primary" id="mGo">Analyse</button></div>`);
   $("#mSens").value = s.sensitivity;
   $("#mStride").value = String(s.stride);
@@ -943,7 +990,7 @@ $("#reanalyzeBtn").onclick = () => {
 document.addEventListener("keydown", (e) => {
   if (e.target.closest("input, select, textarea")) return;
   if (e.key === "Escape") {
-    if (!$("#modal").classList.contains("hidden") && !(S.project?.export_job?.status === "running" && S.exportOpen)) closeModal();
+    if (!$("#modal").classList.contains("hidden") && !(["queued", "running"].includes(S.project?.export_job?.status) && S.exportOpen)) closeModal();
     else if (S.mode === "draw") { setDrawMode(false); render(); }
     else if (S.selected) { S.selected = null; refreshFaces(); renderRegions(); render(); drawTimeline(); }
     return;
@@ -956,16 +1003,16 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "End") { e.preventDefault(); video.pause(); seekFrame(S.n - 1); }
   else if (e.key === "b" || e.key === "B") setView(S.view === "blur" ? "boxes" : "blur");
   else if ((e.key === "x" || e.key === "X") && S.selected?.type === "face") setFaces([S.selected.id], S.disabled.has(S.selected.id));
-  else if ((e.key === "Delete" || e.key === "Backspace") && S.selected?.type === "region") deleteRegion(S.selected.id);
+  else if (e.key === "Delete" && S.selected?.type === "region") deleteRegion(S.selected.id);
 });
 
 /* ---------------------------------------------------------------- start */
 
 window.addEventListener("hashchange", () => {
-  const id = location.hash.slice(1);
+  const id = decodeURIComponent(location.hash.slice(1));
   if (id && id !== S.id) openProject(id);
   else if (!id && S.id) loadHome();
 });
 
-const initial = location.hash.slice(1);
+const initial = decodeURIComponent(location.hash.slice(1));
 if (initial) openProject(initial); else loadHome();

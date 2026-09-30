@@ -6,21 +6,21 @@
 <title>Redactor</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%2314b8a6'/%3E%3Ccircle cx='16' cy='14' r='7' fill='%23fff' opacity='.9'/%3E%3Crect x='6' y='11' width='20' height='6' rx='2' fill='%230f172a'/%3E%3C/svg%3E">
 <link rel="stylesheet" href="/static/style.css?v=__BUILD__">
-<script>window.TOKEN = "__TOKEN__";</script>
+<meta name="redactor-token" content="__TOKEN__">
 </head>
 <body>
 <header class="top">
-  <button class="brand" id="homeBtn" title="All videos">
+  <button class="brand" id="homeBtn" title="All videos" aria-label="Redactor: back to all videos">
     <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="8" fill="currentColor"/><circle cx="16" cy="14" r="7" fill="#fff" opacity=".9"/><rect x="6" y="11" width="20" height="6" rx="2" fill="#0b1220"/></svg>
     <span>Redactor</span>
   </button>
   <div class="crumb" id="crumb"></div>
   <div class="spacer"></div>
   <div class="top-actions hidden" id="topActions">
-    <div class="seg" id="modeSeg" title="How hidden areas look">
+    <div class="seg" id="modeSeg" title="How hidden areas look" role="group" aria-label="How hidden areas look">
       <button data-mode="blur" class="on">Blur</button><button data-mode="pixelate">Pixelate</button><button data-mode="solid">Black box</button>
     </div>
-    <div class="seg" id="shapeSeg" title="Shape used for faces">
+    <div class="seg" id="shapeSeg" title="Shape used for faces" role="group" aria-label="Shape used for faces">
       <button data-shape="ellipse" class="on">Oval</button><button data-shape="rect">Rectangle</button>
     </div>
     <button class="ghost" id="reanalyzeBtn">Re-analyse…</button>
@@ -36,7 +36,7 @@
       <div class="open-card">
         <button class="primary big" id="pickBtn">Choose a video…</button>
         <form id="pathForm" class="path-form">
-          <input id="pathInput" spellcheck="false" placeholder="…or paste a file path, e.g. D:\Footage\interview.mp4">
+          <input id="pathInput" spellcheck="false" aria-label="Path of a video file" placeholder="…or paste a file path, e.g. D:\Footage\interview.mp4">
           <button type="submit" class="ghost">Open</button>
         </form>
         <div class="opts">
@@ -50,7 +50,7 @@
           <label>Speed
             <select id="stride">
               <option value="1" selected>Thorough: check every frame</option>
-              <option value="2">Faster: every 2nd frame (about 2× quicker; can miss brief or fast-moving faces)</option>
+              <option value="2">Faster: check every 2nd frame (can miss brief or fast-moving faces)</option>
             </select>
           </label>
         </div>
@@ -63,8 +63,10 @@
       <h2>Recent</h2>
       <ul id="recentList"><li class="empty">Videos you open appear here.</li></ul>
     </div>
-    <p class="hint legal">Redactor is free software under the GPL-3.0. Its face model was trained on a
-      dataset licensed for non-commercial use only — see THIRD_PARTY_NOTICES.md before using it commercially.</p>
+    <p class="hint legal">Redactor is free software (GPL-3.0-or-later). Its face model was trained on a
+      dataset licensed for non-commercial use only — see THIRD_PARTY_NOTICES.md before using it commercially.
+      Each video you open keeps an unredacted preview copy and face thumbnails on this computer until you
+      delete it from the list above.</p>
   </section>
 </main>
 
@@ -72,7 +74,7 @@
   <section class="workspace">
     <div class="stage">
       <div class="player" id="player">
-        <canvas id="canvas" class="hidden"></canvas>
+        <canvas id="canvas" class="hidden" aria-label="Video with faces hidden"></canvas>
         <video id="video" preload="auto" playsinline></video>
         <div id="drawHint" class="draw-hint hidden">Drag over the area to hide. <kbd>Esc</kbd> to cancel.</div>
         <div id="statusCard" class="status-card hidden">
@@ -83,17 +85,17 @@
         </div>
       </div>
       <div class="transport" id="transport">
-        <button class="icon" id="playBtn" title="Play / pause (Space)"><svg viewBox="0 0 24 24"><path id="playIcon" d="M8 5v14l11-7z"/></svg></button>
-        <button class="icon" id="prevBtn" title="Previous frame (←)"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
-        <button class="icon" id="nextBtn" title="Next frame (→)"><svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg></button>
+        <button class="icon" id="playBtn" title="Play / pause (Space)" aria-label="Play or pause"><svg viewBox="0 0 24 24" aria-hidden="true"><path id="playIcon" d="M8 5v14l11-7z"/></svg></button>
+        <button class="icon" id="prevBtn" title="Previous frame (←)" aria-label="Previous frame"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h2v12H6zm3.5 6 8.5 6V6z"/></svg></button>
+        <button class="icon" id="nextBtn" title="Next frame (→)" aria-label="Next frame"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 18l8.5-6L6 6zM16 6h2v12h-2z"/></svg></button>
         <span class="tc" id="tc">00:00.00</span><span class="dim tc" id="dur">/ 00:00.00</span>
         <span class="dim" id="frameNo"></span>
         <div class="spacer"></div>
-        <div class="seg small" id="viewSeg" title="B toggles">
+        <div class="seg small" id="viewSeg" title="B toggles" role="group" aria-label="Player view">
           <button data-view="blur" class="on">Preview result</button><button data-view="boxes">Show boxes</button>
         </div>
       </div>
-      <canvas id="timeline" class="timeline" title="Click or drag to move through the video"></canvas>
+      <canvas id="timeline" class="timeline" title="Click or drag to move through the video" aria-label="Timeline: click or drag to move through the video"></canvas>
     </div>
 
     <aside class="side">
@@ -108,7 +110,7 @@
           </div>
         </div>
         <div class="bulk">
-          <button class="link" id="allOn">Blur all</button>
+          <button class="link" id="allOn">Hide all</button>
           <button class="link" id="weakOff" title="Seen only once or twice with low confidence: often not a face, but in crowds also real faces seen briefly. Check before using.">Leave low-confidence detections visible</button>
         </div>
         <div id="faceList" class="vlist"></div>
@@ -122,6 +124,8 @@
     </aside>
   </section>
 </main>
+
+<div id="toast" class="toast hidden" role="alert"></div>
 
 <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
   <div class="modal-card" id="modalCard"></div>

@@ -4,19 +4,24 @@
 
     <home>/projects/<id>/
         project.json   settings, status, per-track on/off, manual regions, export history
-        tracks.json    every track's detected boxes + a summary row per track (for the list)
+        tracks.json    one summary row per face track (for the review list)
         boxes.npy      the redaction area of every track on every frame it covers
-        times.json     presentation time of every frame (maps player time <-> frame)
-        proxy.mp4      540p review copy
-        thumbs/<track>.jpg
+        times.json     presentation time of every frame in the preview copy (player time <-> frame)
+        proxy.mp4      540p review copy (unredacted)
+        thumbs/<track>.jpg  (unredacted faces)
 
 boxes.npy is what both the review screen and the export read, so what you see in
-review is what gets exported.
+review is what gets exported. The folder holds unredacted material, which is why
+projects can be deleted from the home screen.
 """
+import copy
 import hashlib
+import itertools
 import json
+import math
 import os
 import re
+import shutil
 import threading
 import time
 from pathlib import Path
@@ -27,6 +32,10 @@ BOX_DTYPE = np.dtype([("f", "<i4"), ("t", "<i4"), ("x1", "<f4"), ("y1", "<f4"),
                       ("x2", "<f4"), ("y2", "<f4"), ("k", "u1")])  # k: 1 detected, 0 filled
 
 SENSITIVITY = {"high": 0.35, "normal": 0.5, "low": 0.7}
+STYLE_MODES = ("blur", "pixelate", "solid")
+STYLE_SHAPES = ("ellipse", "rect")
+PID_RE = re.compile(r"^[a-z0-9-]{1,48}-[0-9a-f]{8}$")
+MAX_LABEL = 120
 
 
 def home():
@@ -42,10 +51,22 @@ def project_id(source):
     return f"{slug}-{digest}"
 
 
-def _write_json(path, data):
+def _write_json(path, data, attempts=5):
+    """Atomic write. Retries briefly: antivirus scanners on Windows can hold a file for a moment."""
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, indent=1))
-    os.replace(tmp, path)
+    tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
+    for i in range(attempts):
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.05 * (i + 1))
+
+
+def _read_json(path):
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def interpolate_region(region, f):
@@ -57,11 +78,48 @@ def interpolate_region(region, f):
         return None
     if f <= keys[0][0]:
         return keys[0][1]
-    for (fa, a), (fb, b) in zip(keys, keys[1:]):
+    for (fa, a), (fb, b) in itertools.pairwise(keys):
         if fa <= f <= fb:
             r = (f - fa) / (fb - fa)
             return [a[i] + (b[i] - a[i]) * r for i in range(4)]
     return keys[-1][1]
+
+
+def clean_region(body, n_frames, width, height):
+    """A region from the browser, checked and normalised; raises ValueError with a readable reason."""
+    if not isinstance(body, dict):
+        raise ValueError("A region must be an object.")
+    last = max(0, int(n_frames) - 1)
+    try:
+        rid = body.get("id")
+        rid = int(rid) if rid not in (None, "", 0) else None
+        start, end = int(body["start"]), int(body["end"])
+        raw_keys = body["keys"]
+    except (KeyError, TypeError, ValueError):
+        raise ValueError("A region needs whole-number start and end frames and keyframes.") from None
+    if not isinstance(raw_keys, dict) or not raw_keys:
+        raise ValueError("A region needs at least one keyframe.")
+    keys = {}
+    for k, box in raw_keys.items():
+        try:
+            f = int(k)
+            x1, y1, x2, y2 = (float(v) for v in box)
+        except (TypeError, ValueError):
+            raise ValueError("Each keyframe must be a frame number with four coordinates.") from None
+        if not all(math.isfinite(v) for v in (x1, y1, x2, y2)):
+            raise ValueError("Keyframe coordinates must be numbers.")
+        x1, x2 = sorted((min(max(x1, 0.0), width), min(max(x2, 0.0), width)))
+        y1, y2 = sorted((min(max(y1, 0.0), height), min(max(y2, 0.0), height)))
+        if x2 - x1 < 1 or y2 - y1 < 1:
+            raise ValueError("A region must be at least one pixel wide and tall.")
+        keys[str(min(max(f, 0), last))] = [round(x1, 1), round(y1, 1), round(x2, 1), round(y2, 1)]
+    start, end = min(max(start, 0), last), min(max(end, 0), last)
+    if start > end:
+        start, end = end, start
+    label = body.get("label")
+    label = str(label).strip()[:MAX_LABEL] if label is not None else ""
+    return {"id": rid, "label": label, "enabled": bool(body.get("enabled", True)),
+            "start": start, "end": end, "keys": keys}
 
 
 class Project:
@@ -72,16 +130,23 @@ class Project:
         self.id = pid
         self.dir = home() / "projects" / pid
         self.lock = threading.RLock()
-        self.data = json.loads((self.dir / "project.json").read_text())
+        self.data = _read_json(self.dir / "project.json")
         self._boxes = None
         self._times = None
-        self._tracks = None
-        self.cancel = False
+        self._summary = None
+        self._last_saved_progress = None
+        self._last_saved_export = None
+        # One flag per kind of job, so stopping one never stops the other. The server
+        # replaces a flag when it queues that job, so a stop pressed while queued counts.
+        self.cancel_analysis = threading.Event()
+        self.cancel_export = threading.Event()
 
     # ---------------------------------------------------------------- lifecycle
 
     @classmethod
     def get(cls, pid):
+        if not isinstance(pid, str) or not PID_RE.match(pid):
+            raise KeyError(pid)
         with cls._cache_lock:
             if pid not in cls._cache:
                 if not (home() / "projects" / pid / "project.json").is_file():
@@ -91,6 +156,11 @@ class Project:
 
     @classmethod
     def create(cls, source, sensitivity="normal", stride=1):
+        if sensitivity not in SENSITIVITY:
+            raise ValueError("Unknown sensitivity.")
+        stride = int(stride)
+        if stride not in (1, 2):
+            raise ValueError("Speed must check every frame (1) or every 2nd frame (2).")
         source = Path(source)
         if not source.is_file():
             raise FileNotFoundError(f"No such file: {source}")
@@ -111,29 +181,54 @@ class Project:
         return cls.get(pid)
 
     @classmethod
+    def delete(cls, pid):
+        """Remove a project's folder (preview copy, thumbnails, choices). Exports beside the source stay."""
+        p = cls.get(pid)
+        with p.lock:
+            job = p.data.get("export_job") or {}
+            if p.data.get("status") in ("queued", "analyzing") or job.get("status") == "running":
+                raise RuntimeError("Stop the running job before deleting this project.")
+            with cls._cache_lock:
+                cls._cache.pop(pid, None)
+            shutil.rmtree(p.dir)
+
+    @classmethod
     def recover_interrupted(cls):
-        """At startup nothing is running: a job still marked running was cut off by the app closing."""
+        """At startup nothing is running: a job still marked running was cut off by the app closing.
+
+        Also removes the half-written files such a job leaves behind.
+        """
         for path in (home() / "projects").glob("*/project.json"):
             try:
-                d = json.loads(path.read_text())
+                d = _read_json(path)
             except (OSError, ValueError):
                 continue
             changed = False
             if d.get("status") in ("queued", "analyzing"):
                 d["status"], d["error"], changed = "cancelled", "Interrupted when the app closed.", True
+            (path.parent / "proxy.part.mp4").unlink(missing_ok=True)
             job = d.get("export_job") or {}
-            if job.get("status") == "running":
+            if job.get("status") in ("running", "queued"):
                 job.update(status="cancelled", error="Interrupted when the app closed.")
                 changed = True
+                if job.get("path"):
+                    out = Path(job["path"])
+                    out.with_name(out.stem + ".part.mp4").unlink(missing_ok=True)
             if changed:
                 _write_json(path, d)
 
     @classmethod
     def list_all(cls):
         rows = []
-        for p in sorted((home() / "projects").glob("*/project.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+        paths = []
+        for p in (home() / "projects").glob("*/project.json"):
             try:
-                d = json.loads(p.read_text())
+                paths.append((p.stat().st_mtime, p))
+            except OSError:
+                continue
+        for _, p in sorted(paths, reverse=True):
+            try:
+                d = _read_json(p)
                 rows.append({k: d.get(k) for k in ("id", "name", "source", "status", "created", "n_frames", "fps")})
             except (OSError, ValueError):
                 continue
@@ -148,23 +243,42 @@ class Project:
             self.data.update(kw)
             self.save()
 
+    def to_json(self):
+        with self.lock:  # the job thread edits this dict while a request serialises it
+            return json.dumps(self.data)
+
+    def _save_quietly(self):
+        """Progress saves are best effort: losing one must never stop a long job."""
+        try:
+            self.save()
+        except OSError:
+            pass
+
     def set_progress(self, stage, value):
         with self.lock:
             self.data["progress"] = {"stage": stage, "value": round(float(value), 4)}
-            # Progress ticks are frequent; persist only stage changes and whole percents.
-            if getattr(self, "_last_saved", None) != (stage, int(value * 100)):
-                self._last_saved = (stage, int(value * 100))
-                self.save()
+            # Ticks are frequent; persist only stage changes and whole percents.
+            mark = (stage, int(value * 100))
+            if mark != self._last_saved_progress:
+                self._last_saved_progress = mark
+                self._save_quietly()
+
+    def set_export_progress(self, job, stage, value):
+        with self.lock:
+            job.update(stage=stage, progress=round(float(value), 4))
+            mark = (stage, int(value * 100))
+            if mark != self._last_saved_export:
+                self._last_saved_export = mark
+                self._save_quietly()
 
     # ---------------------------------------------------------------- analysis results
 
-    def store_results(self, tracks, summary, boxes, times):
-        _write_json(self.dir / "tracks.json", {"tracks": [
-            {"id": t["id"], "boxes": {str(f): [round(v, 2) for v in b] for f, b in t["boxes"].items()}} for t in tracks
-        ], "summary": summary})
+    def store_results(self, summary, boxes, times):
+        (self.dir / "tracks.json").unlink(missing_ok=True)
         np.save(self.dir / "boxes.npy", boxes)
         _write_json(self.dir / "times.json", times)
-        self._boxes, self._tracks, self._times = boxes, None, times
+        _write_json(self.dir / "tracks.json", {"summary": summary})
+        self._boxes, self._summary, self._times = boxes, summary, times
 
     @property
     def boxes(self):
@@ -177,15 +291,15 @@ class Project:
     def times(self):
         if self._times is None:
             path = self.dir / "times.json"
-            self._times = json.loads(path.read_text()) if path.is_file() else []
+            self._times = _read_json(path) if path.is_file() else []
         return self._times
 
     @property
     def track_summary(self):
-        if self._tracks is None:
+        if self._summary is None:
             path = self.dir / "tracks.json"
-            self._tracks = json.loads(path.read_text())["summary"] if path.is_file() else []
-        return self._tracks
+            self._summary = _read_json(path)["summary"] if path.is_file() else []
+        return self._summary
 
     # ---------------------------------------------------------------- queries used by review and export
 
@@ -209,13 +323,28 @@ class Project:
         idx = np.minimum((b["f"][mask].astype(np.int64) * buckets) // n, buckets - 1)
         return np.bincount(idx, minlength=buckets).tolist()
 
-    def frame_boxes(self):
-        """Iterate (frame, [redaction boxes]) in frame order for export: enabled tracks + regions."""
+    def snapshot(self):
+        """Frozen copy of everything an export depends on.
+
+        The export and its report both read this one copy, so switching a face or editing
+        a region while an export runs (another tab, a reload) cannot make the report
+        disagree with the video.
+        """
+        with self.lock:
+            return copy.deepcopy({
+                "disabled_tracks": self.data["disabled_tracks"],
+                "regions": self.data["regions"],
+                "settings": self.data["settings"],
+                "n_frames": self.data["n_frames"], "fps": self.data["fps"],
+            })
+
+    def frame_boxes(self, snap):
+        """Iterate (frame, [redaction boxes]) in frame order: enabled tracks + regions, per `snap`."""
         b = self.boxes
-        disabled = set(self.data["disabled_tracks"])
-        regions = [r for r in self.data["regions"] if r.get("enabled", True)]
+        disabled = set(snap["disabled_tracks"])
+        regions = [r for r in snap["regions"] if r.get("enabled", True)]
         i, n = 0, len(b)
-        for f in range(self.data["n_frames"]):
+        for f in range(snap["n_frames"]):
             items = []
             while i < n and b["f"][i] < f:
                 i += 1
@@ -239,17 +368,21 @@ class Project:
             self.data["disabled_tracks"] = sorted(off)
             self.save()
 
-    def upsert_region(self, region):
+    def set_style(self, mode, shape):
+        if mode not in STYLE_MODES or shape not in STYLE_SHAPES:
+            raise ValueError("Unknown style.")
+        self.update(style={"mode": mode, "shape": shape})
+
+    def upsert_region(self, body):
+        region = clean_region(body, self.data.get("n_frames") or 0,
+                              self.data.get("width") or 0, self.data.get("height") or 0)
         with self.lock:
             regions = self.data["regions"]
-            if not region.get("id"):
+            if region["id"] is None:
                 region["id"] = max([r["id"] for r in regions], default=0) + 1
-            region.setdefault("enabled", True)
-            region.setdefault("label", f"Region {region['id']}")
-            region["keys"] = {str(int(k)): [float(v) for v in box] for k, box in region["keys"].items()}
-            region["start"], region["end"] = int(region["start"]), int(region["end"])
-            self.data["regions"] = [r for r in regions if r["id"] != region["id"]] + [region]
-            self.data["regions"].sort(key=lambda r: r["id"])
+            region["label"] = region["label"] or f"Region {region['id']}"
+            self.data["regions"] = sorted([r for r in regions if r["id"] != region["id"]] + [region],
+                                          key=lambda r: r["id"])
             self.save()
             return region
 
