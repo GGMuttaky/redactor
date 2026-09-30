@@ -12,7 +12,7 @@ Double-click **`Redactor.bat`**. It opens in your browser at `http://127.0.0.1:<
 Close the console window to quit. Starting it again while it runs just opens the running copy.
 
 First run only: the batch file creates a private Python environment in `.venv\` and installs OpenCV,
-NumPy and ONNX Runtime with DirectML — about 100 MB, needs **Python 3.12, 3.13 or 3.14** and an internet
+NumPy and ONNX Runtime with DirectML — about 90 MB, needs **Python 3.12, 3.13 or 3.14** and an internet
 connection once. It runs setup again by itself when `requirements.txt` changes (after an update).
 If setup fails with a "path too long" error, move the folder somewhere short, such as `C:\redactor`.
 

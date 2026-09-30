@@ -10,7 +10,7 @@ if exist ".venv\setup-ok" (
 )
 
 echo Setting up Redactor. This happens once, needs Python 3.12, 3.13 or 3.14 and an internet
-echo connection, and downloads about 100 MB.
+echo connection, and downloads about 90 MB.
 echo.
 if exist ".venv" rmdir /s /q ".venv"
 if exist ".venv" goto :inuse
