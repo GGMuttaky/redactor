@@ -72,7 +72,7 @@ Method and per-clip numbers: `../research/RESULTS_r2.md` (detector choice) and `
 YuNet finds faces the Apache-licensed MediaPipe detector missed entirely (crowds, masks, profiles,
 distance). Finding faces runs at ~50 fps for 1080p and ~108 fps for 720p on the GPU (8–20 fps on
 the CPU). Extrapolated from the short test clips, an hour of 1080p30 would take roughly 40 minutes to
-analyse on the test PC with the GPU. GPU and CPU find the same faces (99.76–100 % matched).
+analyse on that PC with the GPU. GPU and CPU find the same faces (99.76–100 % matched).
 Export runs at ~96 fps with NVENC and ~23 fps with x264 at 1080p.
 "Faster" mode checks every 2nd frame and relies on tracking in between; on the skipped frames it
 covers 0–11 % fewer faces depending on the clip, so every frame is the default.
